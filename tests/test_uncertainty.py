@@ -11,11 +11,41 @@ from halluood.model import ModelAdapterError, TransformersVLMAdapter
 from halluood.uncertainty import (
     CandidateSequenceLogProbability,
     UncertaintyScoreError,
+    augmentation_consistency_score,
     binary_entropy_from_log_scores,
     entropy_from_logits,
     entropy_from_probabilities,
     score_binary_answer_entropy,
 )
+
+
+def test_augmentation_consistency_is_fraction_of_answers_that_disagree():
+    score = augmentation_consistency_score("yes", ("yes", "no", None, "yes"))
+
+    assert score.uncertainty_score == pytest.approx(0.5)
+    assert score.disagreement_count == 2
+    assert score.transformed_view_count == 4
+    assert score.to_dict()["score_direction"] == "higher_means_less_augmentation_consistency"
+
+
+def test_augmentation_consistency_treats_ambiguous_as_a_separate_answer_state():
+    score = augmentation_consistency_score(None, (None, "yes", None))
+
+    assert score.uncertainty_score == pytest.approx(1 / 3)
+    assert score.to_dict()["original_normalized_answer"] is None
+
+
+@pytest.mark.parametrize(
+    ("original", "views", "message"),
+    [
+        ("maybe", ("yes",), "original_answer"),
+        ("yes", ("maybe",), "transformed answers"),
+        ("yes", (), "at least one"),
+    ],
+)
+def test_augmentation_consistency_rejects_invalid_answer_inputs(original, views, message):
+    with pytest.raises(UncertaintyScoreError, match=message):
+        augmentation_consistency_score(original, views)
 
 
 def test_balanced_distribution_has_maximum_binary_entropy():

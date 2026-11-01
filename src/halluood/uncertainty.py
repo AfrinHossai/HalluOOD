@@ -1,4 +1,4 @@
-"""Numerically stable entropy scores for language-model probabilities.
+"""Uncertainty scores for model probabilities and answer stability.
 
 The binary POPE score below compares model likelihoods for two fixed answer
 strings (``Yes`` and ``No``). It is distinct from full-vocabulary next-token
@@ -81,6 +81,70 @@ class BinaryAnswerEntropyScore:
                 "no": self.no_candidate.answer_text,
             },
         }
+
+
+@dataclass(frozen=True)
+class AugmentationConsistencyScore:
+    """Normalized answer disagreement between one original and its views."""
+
+    original_answer: str | None
+    transformed_answers: tuple[str | None, ...]
+    disagreement_count: int
+
+    @property
+    def transformed_view_count(self) -> int:
+        return len(self.transformed_answers)
+
+    @property
+    def uncertainty_score(self) -> float:
+        """Fraction of transformed views whose answer differs from the original."""
+
+        return self.disagreement_count / self.transformed_view_count
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable score with the compared answer labels."""
+
+        return {
+            "method": "normalized_answer_disagreement_from_original",
+            "uncertainty_score": self.uncertainty_score,
+            "score_direction": "higher_means_less_augmentation_consistency",
+            "original_normalized_answer": self.original_answer,
+            "transformed_normalized_answers": list(self.transformed_answers),
+            "disagreement_count": self.disagreement_count,
+            "transformed_view_count": self.transformed_view_count,
+            "normalization_note": (
+                "Parsed answers are lowercase yes/no; ambiguous outputs are None and count "
+                "as a separate answer state."
+            ),
+        }
+
+
+def augmentation_consistency_score(
+    original_answer: str | None,
+    transformed_answers: Sequence[str | None],
+) -> AugmentationConsistencyScore:
+    """Score the share of transformed answers that disagree with the original.
+
+    Inputs must already be normalized to ``yes``, ``no``, or ``None``. ``None``
+    represents an ambiguous/unparseable answer and is compared as its own state.
+    Thus this measures answer instability under the specified views, not the
+    model's absolute uncertainty or probability of hallucination.
+    """
+
+    valid_answers = {"yes", "no", None}
+    if original_answer not in valid_answers:
+        raise UncertaintyScoreError("original_answer must be 'yes', 'no', or None")
+    if not transformed_answers:
+        raise UncertaintyScoreError("at least one transformed answer is required")
+    answers = tuple(transformed_answers)
+    if any(answer not in valid_answers for answer in answers):
+        raise UncertaintyScoreError("transformed answers must be 'yes', 'no', or None")
+    disagreements = sum(answer != original_answer for answer in answers)
+    return AugmentationConsistencyScore(
+        original_answer=original_answer,
+        transformed_answers=answers,
+        disagreement_count=disagreements,
+    )
 
 
 class CandidateScoringAdapter(Protocol):
