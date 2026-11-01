@@ -5,6 +5,7 @@ description = "Training-free OOD and hallucination calibration for vision-langua
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 license = "MIT"
+dependencies = ["numpy>=1.26,<3"]
 
 [dependency-groups]
 dev = [
