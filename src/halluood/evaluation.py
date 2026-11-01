@@ -101,7 +101,7 @@ def risk_coverage_curve(
             "risk": None,
             "retained_count": 0,
             "excluded_count": total,
-            "max_retained_entropy": None,
+            "max_retained_score": None,
         }
     ]
     for threshold in np.unique(score_array):
@@ -113,7 +113,7 @@ def risk_coverage_curve(
                 "risk": float(np.mean(label_array[retained])),
                 "retained_count": retained_count,
                 "excluded_count": total - retained_count,
-                "max_retained_entropy": float(threshold),
+                "max_retained_score": float(threshold),
             }
         )
     return points

@@ -35,6 +35,7 @@ def test_risk_coverage_excludes_high_score_ties_as_a_group():
     assert [point["coverage"] for point in curve] == [0.0, 0.25, 0.5, 1.0]
     assert [point["risk"] for point in curve] == [None, 0.0, 0.5, 0.5]
     assert curve[-1]["excluded_count"] == 0
+    assert curve[-1]["max_retained_score"] == 0.8
 
 
 def test_entropy_evaluation_marks_ambiguous_predictions_as_errors():
