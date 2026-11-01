@@ -24,6 +24,7 @@ from halluood.model import (
     TransformersVLMAdapter,
     VLMAdapter,
 )
+from halluood.uncertainty import score_binary_answer_entropy
 
 CATEGORIES = ("random", "popular", "adversarial")
 DEFAULT_DATA_DIR = Path("data/processed")
@@ -227,6 +228,7 @@ def run_baseline(
     device: str | None = None,
     max_new_tokens: int = 32,
     adapter: VLMAdapter | None = None,
+    record_uncertainty: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Run the selected questions, writing row-level JSONL and summary JSON."""
 
@@ -280,6 +282,30 @@ def run_baseline(
                     normalized_prediction = None
             inference_time = time.perf_counter() - start_time
 
+            uncertainty_score: dict[str, Any] | None = None
+            uncertainty_error: str | None = None
+            uncertainty_time: float | None = None
+            uncertainty_start: float | None = None
+            if record_uncertainty and prediction_status != "error":
+                try:
+                    _synchronize_mps(adapter.metadata.device)
+                    uncertainty_start = time.perf_counter()
+                    uncertainty_score = score_binary_answer_entropy(
+                        adapter,
+                        image_path,
+                        record.text,
+                    ).to_dict()
+                except Exception as exc:
+                    uncertainty_error = f"{type(exc).__name__}: {exc}"
+                finally:
+                    try:
+                        _synchronize_mps(adapter.metadata.device)
+                    except Exception as exc:
+                        if uncertainty_error is None:
+                            uncertainty_error = f"{type(exc).__name__}: {exc}"
+                    if uncertainty_start is not None:
+                        uncertainty_time = time.perf_counter() - uncertainty_start
+
             row = {
                 "question_id": record.question_id,
                 "image_id": _image_id(record.image),
@@ -304,6 +330,11 @@ def run_baseline(
             }
             if error_message is not None:
                 row["error"] = error_message
+            if record_uncertainty:
+                row["uncertainty_score"] = uncertainty_score
+                row["uncertainty_time_seconds"] = uncertainty_time
+                if uncertainty_error is not None:
+                    row["uncertainty_error"] = uncertainty_error
             result_rows.append(row)
             output_stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
             output_stream.flush()
@@ -330,6 +361,17 @@ def run_baseline(
             "accuracy_on_parsed is reported separately."
         ),
     }
+    if record_uncertainty:
+        uncertainty_rows = [
+            row for row in result_rows if row.get("uncertainty_score") is not None
+        ]
+        summary["uncertainty_method"] = {
+            "name": "conditional_binary_answer_sequence_entropy",
+            "candidate_answers": ["Yes", "No"],
+            "score_direction": "higher_means_more_uncertain",
+            "scored_count": len(uncertainty_rows),
+            "error_count": sum("uncertainty_error" in row for row in result_rows),
+        }
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -353,6 +395,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument(
+        "--record-uncertainty",
+        action="store_true",
+        help=(
+            "also score conditional Yes/No candidate-sequence entropy using model logits "
+            "(requires a Transformers adapter; adds two model forward passes per question)"
+        ),
+    )
     return parser
 
 
@@ -368,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
             cache_dir=args.cache_dir,
             device=None if args.device == "auto" else args.device,
             max_new_tokens=args.max_new_tokens,
+            record_uncertainty=args.record_uncertainty,
         )
     except Exception as exc:
         print(f"baseline evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)

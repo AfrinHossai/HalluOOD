@@ -15,6 +15,8 @@ from typing import Any, Callable, Protocol
 
 from PIL import Image, UnidentifiedImageError
 
+from halluood.uncertainty import CandidateSequenceLogProbability
+
 RECOMMENDED_MODEL_ID = "HuggingFaceTB/SmolVLM-500M-Instruct"
 RECOMMENDED_MODEL_REVISION = "a7da5b986cb59b408707209984f360a5f4ad7e47"
 
@@ -298,6 +300,153 @@ class TransformersVLMAdapter:
         finally:
             rgb_image.close()
         return _extract_text(output)
+
+    def score_candidate_answers(
+        self,
+        image: ImageInput,
+        question: str,
+        candidate_answers: tuple[str, ...] = ("Yes", "No"),
+    ) -> dict[str, CandidateSequenceLogProbability]:
+        """Score candidate strings with conditional sequence log probabilities.
+
+        Each candidate is appended as an assistant turn using the loaded
+        processor's chat template. The model's causal logits at each answer
+        token position are normalized over the full vocabulary; the selected
+        token log probabilities are summed. Trailing chat end markers are not
+        included in the textual candidate likelihood.
+        """
+
+        _validate_question(question)
+        if not candidate_answers or any(
+            not isinstance(answer, str) or not answer.strip() for answer in candidate_answers
+        ):
+            raise ValueError("candidate_answers must contain non-empty strings")
+        if len(set(candidate_answers)) != len(candidate_answers):
+            raise ValueError("candidate_answers must be unique")
+
+        processor = getattr(self._pipeline, "processor", None)
+        model = getattr(self._pipeline, "model", None)
+        if processor is None or model is None:
+            raise ModelAdapterError(
+                "candidate likelihood scoring requires a loaded Transformers model and processor"
+            )
+
+        torch = self._torch
+        if torch is None:
+            try:
+                import torch as torch_module
+            except ImportError as exc:
+                raise ModelAdapterError("candidate likelihood scoring requires PyTorch") from exc
+            torch = torch_module
+
+        tokenizer = getattr(processor, "tokenizer", None)
+        if tokenizer is None:
+            raise ModelAdapterError("the loaded multimodal processor has no tokenizer")
+        special_token_ids = set(getattr(tokenizer, "all_special_ids", ()))
+        device = getattr(model, "device", self._metadata.device)
+        model_dtype = getattr(model, "dtype", None)
+        rgb_image = _load_rgb_image(image)
+
+        def make_user_turn() -> dict[str, Any]:
+            return {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": rgb_image},
+                    {"type": "text", "text": question},
+                ],
+            }
+
+        def encode(messages: list[dict[str, Any]]) -> Any:
+            encoded = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            if model_dtype is not None:
+                encoded = encoded.to(dtype=model_dtype)
+            return encoded.to(device)
+
+        try:
+            prompt_inputs = processor.apply_chat_template(
+                [make_user_turn()],
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            if model_dtype is not None:
+                prompt_inputs = prompt_inputs.to(dtype=model_dtype)
+            prompt_inputs = prompt_inputs.to(device)
+            prompt_ids = prompt_inputs["input_ids"][0]
+            prompt_length = int(prompt_ids.shape[0])
+            if prompt_length == 0:
+                raise ModelAdapterError("processor produced an empty answer prompt")
+
+            scored: dict[str, CandidateSequenceLogProbability] = {}
+            for answer in candidate_answers:
+                full_inputs = encode(
+                    [
+                        make_user_turn(),
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": answer}],
+                        },
+                    ]
+                )
+                full_ids = full_inputs["input_ids"][0]
+                if full_ids.shape[0] <= prompt_length or not torch.equal(
+                    full_ids[:prompt_length], prompt_ids
+                ):
+                    raise ModelAdapterError(
+                        "candidate chat tokens do not share the generation prompt prefix; "
+                        "cannot align answer-position logits safely"
+                    )
+
+                candidate_token_ids = full_ids[prompt_length:].tolist()
+                terminal_marker = next(
+                    (
+                        index
+                        for index, token_id in enumerate(candidate_token_ids)
+                        if token_id in special_token_ids
+                    ),
+                    len(candidate_token_ids),
+                )
+                candidate_token_ids = candidate_token_ids[:terminal_marker]
+                if not candidate_token_ids:
+                    raise ModelAdapterError(
+                        f"processor produced no text tokens for candidate {answer!r}"
+                    )
+
+                with torch.inference_mode():
+                    outputs = model(**full_inputs)
+                    logits = outputs.logits[0]
+                    start = prompt_length - 1
+                    stop = start + len(candidate_token_ids)
+                    if stop > logits.shape[0]:
+                        raise ModelAdapterError(
+                            "model returned too few logits to score the candidate answer"
+                        )
+                    answer_step_logits = logits[start:stop].float()
+                    target_ids = torch.tensor(
+                        candidate_token_ids,
+                        dtype=torch.long,
+                        device=answer_step_logits.device,
+                    )
+                    token_log_probabilities = torch.log_softmax(
+                        answer_step_logits,
+                        dim=-1,
+                    ).gather(-1, target_ids.unsqueeze(-1))
+                    sequence_log_probability = float(token_log_probabilities.sum().item())
+
+                scored[answer] = CandidateSequenceLogProbability(
+                    answer_text=answer,
+                    token_ids=tuple(int(token_id) for token_id in candidate_token_ids),
+                    log_probability=sequence_log_probability,
+                )
+            return scored
+        finally:
+            rgb_image.close()
 
 
 class MockVLMAdapter:

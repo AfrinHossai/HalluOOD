@@ -3,8 +3,10 @@
 ## Scope
 
 This command evaluates the frozen SmolVLM checkpoint on a small POPE pilot
-sample. It measures yes/no answer accuracy and counts ambiguous responses. This
-baseline does not compute uncertainty scores or test distribution shifts.
+sample. By default, it measures yes/no answer accuracy and counts ambiguous
+responses without computing uncertainty scores or testing distribution shifts.
+The opt-in `--record-uncertainty` flag also computes conditional binary answer
+entropy from model logits.
 
 The inputs are the three prepared files in `data/processed/`:
 
@@ -40,7 +42,9 @@ local files and are excluded from Git by the `data/` ignore rule.
 
 Useful options include `--annotations-dir`, `--image-dir`, `--output`,
 `--cache-dir`, `--sample-size`, `--seed`, `--device`, and
-`--max-new-tokens`. Run `scripts/run_baseline.py --help` for the defaults.
+`--max-new-tokens`. To include the binary answer entropy diagnostic, add
+`--record-uncertainty`; this adds two teacher-forced model forward passes per
+question. Run `scripts/run_baseline.py --help` for the defaults.
 
 ## Result files and answer parsing
 
@@ -59,6 +63,41 @@ all-question accuracy denominator is the full sample, so ambiguous and failed
 responses count as incorrect. Accuracy on parsed responses is also reported
 separately. Failed inference rows are retained with a null prediction and an
 error description.
+
+When uncertainty recording is enabled, each successfully generated row also
+contains `uncertainty_score` and `uncertainty_time_seconds`. The score object
+records candidate log probabilities, actual token IDs and counts, normalized
+Yes/No probabilities, entropy in nats, and entropy divided by `log(2)`.
+Uncertainty-scoring errors are stored separately from generation errors and do
+not change the generated prediction.
+
+## Binary answer entropy
+
+For the fixed candidate strings `Yes` and `No`, the adapter tokenizes each full
+assistant answer with the loaded multimodal chat template. This supports
+tokenizers where either answer uses multiple tokens. It verifies that each
+candidate sequence begins with the same image-and-question generation prompt.
+For each candidate token, a teacher-forced forward pass obtains the model's
+actual next-token logits. A vocabulary-wide log-softmax gives that token's
+log-probability; the adapter sums those values across the candidate's text
+tokens. Trailing chat end markers are excluded. The two summed sequence log
+probabilities are then normalized with a stable two-choice softmax to form a
+distribution conditioned on the candidate set `{Yes, No}`. Shannon entropy is
+reported in nats, with `H / log(2)` as a normalized value from 0 to 1. A
+balanced candidate distribution has normalized entropy 1; a concentrated one
+approaches 0.
+
+This is **binary candidate-sequence entropy**, not full-vocabulary next-token
+entropy. The research plan's primary predictive-entropy definition is the mean
+full-vocabulary entropy over generated answer-token positions. The helper
+`entropy_from_logits` supports full-vocabulary entropy calculations, but this
+opt-in POPE path does not currently aggregate those values over generated
+tokens. The binary score depends on the exact candidate strings, prompt
+template, tokenizer, and checkpoint; comparing Yes and No sequence likelihoods
+can also be affected by their different token counts. It measures relative
+uncertainty between these two fixed answer candidates, **not the probability
+that an answer is hallucinated**. Calibration and held-out evaluation would be
+required to assess hallucination prediction.
 
 ## Interpretation
 

@@ -4,6 +4,7 @@ from collections import Counter
 from PIL import Image
 
 from halluood.model import MockVLMAdapter
+from halluood.uncertainty import CandidateSequenceLogProbability
 from scripts.run_baseline import (
     CATEGORIES,
     normalize_prediction,
@@ -112,6 +113,8 @@ def test_baseline_writes_rows_and_category_metrics_with_mock(tmp_path):
     assert all(row["model_identifier"] == "halluood/mock-vlm" for row in saved_rows)
     assert all(row["normalized_prediction"] == "yes" for row in saved_rows)
     assert all(row["inference_time_seconds"] >= 0 for row in saved_rows)
+    assert all("uncertainty_score" not in row for row in saved_rows)
+    assert "uncertainty_method" not in summary
     assert set(saved_rows[0]) >= {
         "question_id",
         "image_id",
@@ -123,3 +126,36 @@ def test_baseline_writes_rows_and_category_metrics_with_mock(tmp_path):
         "inference_time_seconds",
     }
     assert set(summary["by_category"]) == set(CATEGORIES)
+
+
+def test_baseline_uncertainty_is_opt_in_and_saved_per_question(tmp_path):
+    annotations_dir, image_dir = _write_pilot(tmp_path)
+
+    class ScoringMockAdapter(MockVLMAdapter):
+        def __init__(self):
+            super().__init__(answer="Yes, visible.")
+            self.score_calls = []
+
+        def score_candidate_answers(self, image, question, candidate_answers):
+            self.score_calls.append((str(image), question, candidate_answers))
+            return {
+                "Yes": CandidateSequenceLogProbability("Yes", (1,), -1.0),
+                "No": CandidateSequenceLogProbability("No", (2,), -1.0),
+            }
+
+    adapter = ScoringMockAdapter()
+    summary, rows = run_baseline(
+        annotations_dir=annotations_dir,
+        image_dir=image_dir,
+        output_file=tmp_path / "results" / "with_uncertainty.jsonl",
+        sample_size=3,
+        random_seed=19,
+        adapter=adapter,
+        record_uncertainty=True,
+    )
+
+    assert len(adapter.calls) == len(adapter.score_calls) == 3
+    assert all(call[2] == ("Yes", "No") for call in adapter.score_calls)
+    assert all(row["uncertainty_score"]["normalized_entropy"] == 1.0 for row in rows)
+    assert all(row["uncertainty_time_seconds"] >= 0 for row in rows)
+    assert summary["uncertainty_method"]["scored_count"] == 3
