@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass, field
 from importlib.metadata import PackageNotFoundError, version
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -60,6 +62,70 @@ class GenerationSettings:
 
 
 @dataclass(frozen=True)
+class SamplingSettings:
+    """Controlled settings for repeated stochastic answer generation."""
+
+    num_generations: int = 5
+    temperature: float = 0.7
+    top_p: float = 0.9
+    seed: int = 2027
+    max_new_tokens: int = 32
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.num_generations, bool)
+            or not isinstance(self.num_generations, int)
+            or self.num_generations < 1
+        ):
+            raise ValueError("num_generations must be a positive integer")
+        if (
+            isinstance(self.temperature, bool)
+            or not isinstance(self.temperature, Real)
+            or not isfinite(self.temperature)
+            or self.temperature <= 0
+        ):
+            raise ValueError("temperature must be a finite number greater than zero")
+        if (
+            isinstance(self.top_p, bool)
+            or not isinstance(self.top_p, Real)
+            or not isfinite(self.top_p)
+            or not 0 < self.top_p <= 1
+        ):
+            raise ValueError("top_p must be a finite number in (0, 1]")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+            raise ValueError("seed must be a non-negative integer")
+        if (
+            isinstance(self.max_new_tokens, bool)
+            or not isinstance(self.max_new_tokens, int)
+            or self.max_new_tokens < 1
+        ):
+            raise ValueError("max_new_tokens must be a positive integer")
+        if self.seed + self.num_generations - 1 > 2**63 - 1:
+            raise ValueError("seed range exceeds the supported torch seed range")
+
+    @property
+    def generation_seeds(self) -> tuple[int, ...]:
+        """Return one distinct reproducible seed per response."""
+
+        return tuple(self.seed + index for index in range(self.num_generations))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return JSON-serializable sampling settings and the per-response seeds."""
+
+        return {
+            "do_sample": True,
+            "num_beams": 1,
+            "num_generations": self.num_generations,
+            "temperature": float(self.temperature),
+            "top_p": float(self.top_p),
+            "seed": self.seed,
+            "generation_seeds": list(self.generation_seeds),
+            "seed_strategy": "generation_seed = base_seed + zero_based_generation_index",
+            "max_new_tokens": self.max_new_tokens,
+        }
+
+
+@dataclass(frozen=True)
 class ModelMetadata:
     """Model, runtime, and decoding details to store with an inference run."""
 
@@ -86,6 +152,13 @@ class VLMAdapter(Protocol):
     def metadata(self) -> ModelMetadata: ...
 
     def generate_answer(self, image: ImageInput, question: str) -> str: ...
+
+    def generate_sampled_answers(
+        self,
+        image: ImageInput,
+        question: str,
+        settings: SamplingSettings,
+    ) -> list[str]: ...
 
 
 def _validate_question(question: str) -> None:
@@ -301,6 +374,59 @@ class TransformersVLMAdapter:
         finally:
             rgb_image.close()
         return _extract_text(output)
+
+    def generate_sampled_answers(
+        self,
+        image: ImageInput,
+        question: str,
+        settings: SamplingSettings,
+    ) -> list[str]:
+        """Generate repeated stochastic answers with a distinct recorded seed each time.
+
+        This separate method leaves :meth:`generate_answer` on its existing
+        deterministic greedy path. A failing generation aborts the call and
+        reports its index; partial answer lists are never returned.
+        """
+
+        _validate_question(question)
+        if not isinstance(settings, SamplingSettings):
+            raise TypeError("settings must be a SamplingSettings instance")
+        rgb_image = _load_rgb_image(image)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": rgb_image},
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
+        answers: list[str] = []
+        try:
+            for index, seed in enumerate(settings.generation_seeds, start=1):
+                try:
+                    if self._torch is not None:
+                        self._torch.manual_seed(seed)
+                    output = self._pipeline(
+                        text=messages,
+                        max_new_tokens=settings.max_new_tokens,
+                        generate_kwargs={
+                            "do_sample": True,
+                            "num_beams": 1,
+                            "temperature": float(settings.temperature),
+                            "top_p": float(settings.top_p),
+                        },
+                        return_full_text=False,
+                    )
+                    answers.append(_extract_text(output))
+                except Exception as exc:
+                    raise ModelAdapterError(
+                        f"sample generation {index}/{settings.num_generations} "
+                        f"(seed {seed}) failed: {type(exc).__name__}: {exc}"
+                    ) from exc
+        finally:
+            rgb_image.close()
+        return answers
 
     @property
     def vision_encoder_metadata(self) -> dict[str, Any]:
@@ -569,11 +695,25 @@ class TransformersVLMAdapter:
 class MockVLMAdapter:
     """Small deterministic adapter for tests that must not load model weights."""
 
-    def __init__(self, answer: str = "MOCK_ANSWER") -> None:
+    def __init__(
+        self,
+        answer: str = "MOCK_ANSWER",
+        *,
+        sampled_answers: tuple[str, ...] | list[str] | None = None,
+    ) -> None:
         if not isinstance(answer, str):
             raise TypeError("mock answer must be a string")
+        if sampled_answers is not None and any(
+            not isinstance(sampled_answer, str) for sampled_answer in sampled_answers
+        ):
+            raise TypeError("sampled_answers must contain only strings")
         self._answer = answer
+        self._sampled_answers = (
+            tuple(sampled_answers) if sampled_answers is not None else None
+        )
+        self._sampled_answer_offset = 0
         self.calls: list[dict[str, str]] = []
+        self.sampled_calls: list[dict[str, Any]] = []
         self._metadata = ModelMetadata(
             model_id="halluood/mock-vlm",
             requested_revision="test-only",
@@ -594,3 +734,34 @@ class MockVLMAdapter:
         image_description = str(image) if isinstance(image, (str, Path)) else "<PIL.Image>"
         self.calls.append({"image": image_description, "question": question})
         return self._answer
+
+    def generate_sampled_answers(
+        self,
+        image: ImageInput,
+        question: str,
+        settings: SamplingSettings,
+    ) -> list[str]:
+        """Return scripted or repeated mock answers without model inference."""
+
+        _validate_question(question)
+        if not isinstance(settings, SamplingSettings):
+            raise TypeError("settings must be a SamplingSettings instance")
+        image_description = str(image) if isinstance(image, (str, Path)) else "<PIL.Image>"
+        self.sampled_calls.append(
+            {
+                "image": image_description,
+                "question": question,
+                "sampling_settings": settings.to_dict(),
+            }
+        )
+        if self._sampled_answers is None:
+            return [self._answer] * settings.num_generations
+        start = self._sampled_answer_offset
+        stop = start + settings.num_generations
+        if stop > len(self._sampled_answers):
+            raise ModelAdapterError(
+                f"mock has {len(self._sampled_answers) - start} sampled answers remaining; "
+                f"{settings.num_generations} requested"
+            )
+        self._sampled_answer_offset = stop
+        return list(self._sampled_answers[start:stop])

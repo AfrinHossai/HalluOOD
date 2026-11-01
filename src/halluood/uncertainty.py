@@ -119,6 +119,89 @@ class AugmentationConsistencyScore:
         }
 
 
+@dataclass(frozen=True)
+class AnswerDisagreementScore:
+    """Empirical answer-distribution entropy across sampled generations."""
+
+    normalized_answers: tuple[str, ...]
+    yes_count: int
+    no_count: int
+    ambiguous_count: int
+    entropy_nats: float
+    normalized_score: float
+
+    @property
+    def generation_count(self) -> int:
+        return len(self.normalized_answers)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the score with response counts and empirical proportions."""
+
+        count = self.generation_count
+        counts = {
+            "yes": self.yes_count,
+            "no": self.no_count,
+            "ambiguous": self.ambiguous_count,
+        }
+        return {
+            "method": "normalized_sampled_answer_distribution_entropy",
+            "uncertainty_score": self.normalized_score,
+            "score_direction": "higher_means_more_sampled_answer_disagreement",
+            "entropy_nats": self.entropy_nats,
+            "normalization_constant_nats": log(3.0),
+            "generation_count": count,
+            "counts": counts,
+            "proportions": {label: value / count for label, value in counts.items()},
+            "normalized_answers": list(self.normalized_answers),
+            "ambiguous_answer_treatment": (
+                "Ambiguous or unparseable responses form a third response category."
+            ),
+        }
+
+
+def answer_disagreement_score(
+    normalized_answers: Sequence[str],
+) -> AnswerDisagreementScore:
+    """Calculate normalized entropy of sampled ``yes``/``no``/``ambiguous`` labels.
+
+    For empirical proportions ``p_i`` over the fixed three-category answer
+    space, the score is ``-sum(p_i * log(p_i)) / log(3)`` (zero terms omitted).
+    It is 0 for unanimous generations and 1 when the three categories occur
+    equally often. Ambiguous responses are retained as their own category; they
+    are not discarded or treated as either yes or no. This is an empirical
+    answer-distribution score, not model-token entropy or a probability of error.
+    """
+
+    try:
+        answers = tuple(normalized_answers)
+    except TypeError as exc:
+        raise UncertaintyScoreError("normalized_answers must be a non-empty sequence") from exc
+    if not answers:
+        raise UncertaintyScoreError("at least one sampled answer is required")
+    valid_answers = {"yes", "no", "ambiguous"}
+    if any(not isinstance(answer, str) or answer not in valid_answers for answer in answers):
+        raise UncertaintyScoreError(
+            "sampled answers must be normalized to 'yes', 'no', or 'ambiguous'"
+        )
+
+    counts = {label: answers.count(label) for label in ("yes", "no", "ambiguous")}
+    total = len(answers)
+    proportions = {label: count / total for label, count in counts.items()}
+    entropy_nats = sum(
+        -proportion * log(proportion)
+        for proportion in proportions.values()
+        if proportion > 0.0
+    )
+    return AnswerDisagreementScore(
+        normalized_answers=answers,
+        yes_count=counts["yes"],
+        no_count=counts["no"],
+        ambiguous_count=counts["ambiguous"],
+        entropy_nats=entropy_nats,
+        normalized_score=entropy_nats / log(3.0),
+    )
+
+
 def augmentation_consistency_score(
     original_answer: str | None,
     transformed_answers: Sequence[str | None],
