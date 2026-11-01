@@ -13,6 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from halluood.uncertainty import CandidateSequenceLogProbability
@@ -300,6 +301,122 @@ class TransformersVLMAdapter:
         finally:
             rgb_image.close()
         return _extract_text(output)
+
+    @property
+    def vision_encoder_metadata(self) -> dict[str, Any]:
+        """Describe the frozen visual tower and feature extraction procedure."""
+
+        model = getattr(self._pipeline, "model", None)
+        processor = getattr(self._pipeline, "processor", None)
+        if model is None or processor is None:
+            raise ModelAdapterError("image feature extraction requires a model and processor")
+        config = getattr(model, "config", None)
+        vision_config = getattr(config, "vision_config", None)
+        inner_model = getattr(model, "model", model)
+        vision_tower = getattr(inner_model, "vision_model", None)
+        connector = getattr(inner_model, "connector", None)
+        text_config = getattr(config, "text_config", None)
+        return {
+            "model_identifier": self._metadata.model_id,
+            "model_revision": self._metadata.resolved_revision
+            or self._metadata.requested_revision,
+            "model_class": type(model).__name__,
+            "vision_tower_class": type(vision_tower).__name__ if vision_tower else None,
+            "vision_model_type": getattr(vision_config, "model_type", None),
+            "vision_hidden_size": getattr(vision_config, "hidden_size", None),
+            "connector_class": type(connector).__name__ if connector else None,
+            "feature_dimension": getattr(text_config, "hidden_size", None),
+            "processor_class": type(processor).__name__,
+            "feature_source": "model.get_image_features (frozen vision tower and connector)",
+            "pooling": "arithmetic mean over projected image-token features and image crops",
+            "device": self._metadata.device,
+            "precision": self._metadata.precision,
+            "transformers_version": self._metadata.transformers_version,
+            "torch_version": self._metadata.torch_version,
+        }
+
+    def extract_image_embedding(self, image: ImageInput) -> np.ndarray:
+        """Return a mean-pooled SmolVLM visual feature without running its decoder."""
+
+        model = getattr(self._pipeline, "model", None)
+        processor = getattr(self._pipeline, "processor", None)
+        if model is None or processor is None:
+            raise ModelAdapterError("image feature extraction requires a model and processor")
+        get_image_features = getattr(model, "get_image_features", None)
+        if not callable(get_image_features):
+            raise ModelAdapterError("the loaded model does not expose get_image_features")
+        torch = self._torch
+        if torch is None:
+            try:
+                import torch as torch_module
+            except ImportError as exc:
+                raise ModelAdapterError("image feature extraction requires PyTorch") from exc
+            torch = torch_module
+
+        rgb_image = _load_rgb_image(image)
+        try:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": rgb_image},
+                        {"type": "text", "text": "Extract image features."},
+                    ],
+                }
+            ]
+            inputs = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            device = getattr(model, "device", self._metadata.device)
+            inputs = inputs.to(device)
+            pixel_values = inputs.get("pixel_values")
+            if pixel_values is None:
+                raise ModelAdapterError("the processor returned no pixel_values for the image")
+            with torch.inference_mode():
+                features = get_image_features(
+                    pixel_values=pixel_values,
+                    pixel_attention_mask=inputs.get("pixel_attention_mask"),
+                )
+            pooled_features = getattr(features, "pooler_output", None)
+            if (
+                pooled_features is None
+                and isinstance(features, (tuple, list))
+                and len(features) > 1
+            ):
+                pooled_features = features[1]
+            if isinstance(pooled_features, (tuple, list)):
+                if len(pooled_features) != 1:
+                    raise ModelAdapterError(
+                        "expected one image in the feature output, "
+                        f"received {len(pooled_features)} feature groups"
+                    )
+                pooled_features = pooled_features[0]
+            if not isinstance(pooled_features, torch.Tensor):
+                raise ModelAdapterError("the model returned no tensor image features")
+            if pooled_features.ndim == 3:
+                if pooled_features.shape[0] != 1:
+                    raise ModelAdapterError("expected a single image in the feature batch")
+                pooled_features = pooled_features[0]
+            if pooled_features.ndim != 2 or pooled_features.shape[0] == 0:
+                raise ModelAdapterError(
+                    "image features must be a non-empty matrix of token features"
+                )
+            embedding = (
+                pooled_features.float()
+                .mean(dim=0)
+                .detach()
+                .to(device="cpu")
+                .numpy()
+                .astype(np.float32, copy=True)
+            )
+            if not np.isfinite(embedding).all() or np.linalg.norm(embedding) == 0:
+                raise ModelAdapterError("the model returned an invalid or zero image embedding")
+            return embedding
+        finally:
+            rgb_image.close()
 
     def score_candidate_answers(
         self,

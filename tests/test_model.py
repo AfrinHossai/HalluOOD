@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -151,3 +152,60 @@ def test_extracting_unrecognized_pipeline_output_raises_adapter_error():
 
     with pytest.raises(ModelAdapterError, match="could not extract"):
         adapter.generate_answer(Image.new("RGB", (1, 1)), "What is visible?")
+
+
+def test_transformers_adapter_extracts_mean_pooled_image_features():
+    torch = pytest.importorskip("torch")
+
+    class FakeBatch(dict):
+        def to(self, *args, **kwargs):
+            return self
+
+    class FakeProcessor:
+        def apply_chat_template(self, messages, **kwargs):
+            image = messages[0]["content"][0]["image"]
+            assert image.mode == "RGB"
+            assert kwargs["tokenize"] is True
+            return FakeBatch(
+                pixel_values=torch.ones((1, 1, 3, 4, 4), dtype=torch.float32),
+                pixel_attention_mask=torch.ones((1, 1, 4, 4), dtype=torch.long),
+            )
+
+    class FakeModel:
+        device = "cpu"
+        dtype = torch.float32
+        config = SimpleNamespace(
+            vision_config=SimpleNamespace(model_type="siglip_vision_model", hidden_size=8),
+            text_config=SimpleNamespace(hidden_size=16),
+        )
+        model = SimpleNamespace(vision_model=object(), connector=object())
+
+        def get_image_features(self, *, pixel_values, pixel_attention_mask):
+            assert pixel_values.shape == (1, 1, 3, 4, 4)
+            assert pixel_attention_mask.shape == (1, 1, 4, 4)
+            assert torch.is_inference_mode_enabled()
+            features = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+            return SimpleNamespace(pooler_output=[features])
+
+    class FakePipeline:
+        model = FakeModel()
+        processor = FakeProcessor()
+
+        def __call__(self, **kwargs):
+            return "unused"
+
+    adapter = TransformersVLMAdapter(
+        FakePipeline(),
+        model_id="test/smolvlm",
+        requested_revision="rev-1",
+        resolved_revision="rev-1",
+        torch_module=torch,
+    )
+
+    embedding = adapter.extract_image_embedding(Image.new("RGBA", (4, 4)))
+    metadata = adapter.vision_encoder_metadata
+
+    assert embedding.tolist() == pytest.approx([2.0, 3.0])
+    assert metadata["vision_model_type"] == "siglip_vision_model"
+    assert metadata["feature_dimension"] == 16
+    assert metadata["pooling"].startswith("arithmetic mean")
