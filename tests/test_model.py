@@ -18,8 +18,9 @@ def test_transformers_adapter_sends_local_image_and_uses_greedy_decoding():
 
     def fake_pipeline(**kwargs):
         observed.update(kwargs)
-        assert kwargs["images"][0].mode == "RGB"
-        assert kwargs["images"][0].size == (4, 3)
+        supplied_image = kwargs["text"][0]["content"][0]["image"]
+        assert supplied_image.mode == "RGB"
+        assert supplied_image.size == (4, 3)
         return [
             {
                 "generated_text": [
@@ -44,13 +45,13 @@ def test_transformers_adapter_sends_local_image_and_uses_greedy_decoding():
     answer = adapter.generate_answer(image, "Is there a bicycle?")
 
     assert answer == "MOCK_ANSWER"
-    assert observed["text"][0]["content"] == [
-        {"type": "image"},
-        {"type": "text", "text": "Is there a bicycle?"},
-    ]
+    content = observed["text"][0]["content"]
+    assert content[0]["type"] == "image"
+    assert isinstance(content[0]["image"], Image.Image)
+    assert content[1] == {"type": "text", "text": "Is there a bicycle?"}
+    assert "images" not in observed
     assert observed["max_new_tokens"] == 16
-    assert observed["do_sample"] is False
-    assert observed["num_beams"] == 1
+    assert observed["generate_kwargs"] == {"do_sample": False, "num_beams": 1}
     assert observed["return_full_text"] is False
     assert image.mode == "RGBA"  # the adapter did not mutate the caller's image
 
@@ -62,8 +63,9 @@ def test_transformers_adapter_accepts_image_path_and_plain_text_output(tmp_path)
     observed = {}
 
     def fake_pipeline(**kwargs):
-        observed["image_mode"] = kwargs["images"][0].mode
-        observed["image_size"] = kwargs["images"][0].size
+        image = kwargs["text"][0]["content"][0]["image"]
+        observed["image_mode"] = image.mode
+        observed["image_size"] = image.size
         return [{"generated_text": "MOCK_PATH_ANSWER"}]
 
     fake_pipeline = Mock(side_effect=fake_pipeline)

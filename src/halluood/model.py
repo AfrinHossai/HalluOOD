@@ -7,6 +7,7 @@ when ``TransformersVLMAdapter.from_pretrained`` is called.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -164,11 +165,13 @@ class TransformersVLMAdapter:
         transformers_version: str | None = None,
         torch_version: str | None = None,
         generation: GenerationSettings | None = None,
+        torch_module: Any | None = None,
     ) -> None:
         if not callable(pipeline):
             raise TypeError("pipeline must be callable")
         self._pipeline = pipeline
         self._generation = generation or GenerationSettings()
+        self._torch = torch_module
         self._metadata = ModelMetadata(
             model_id=model_id,
             requested_revision=requested_revision,
@@ -189,8 +192,18 @@ class TransformersVLMAdapter:
         revision: str = RECOMMENDED_MODEL_REVISION,
         device: str | None = None,
         generation: GenerationSettings | None = None,
+        cache_dir: str | Path | None = None,
     ) -> TransformersVLMAdapter:
         """Load a pinned checkpoint; this method may download model weights."""
+
+        resolved_cache_dir = None
+        if cache_dir is not None:
+            resolved_cache_dir = Path(cache_dir).expanduser()
+            resolved_cache_dir.mkdir(parents=True, exist_ok=True)
+            # Transformers uses model_kwargs for weights and HF_HOME for the
+            # processor assets loaded by pipeline(). Set this before importing
+            # Hugging Face libraries so both use the requested local cache.
+            os.environ["HF_HOME"] = str(resolved_cache_dir)
 
         try:
             import torch
@@ -206,15 +219,37 @@ class TransformersVLMAdapter:
             mps_backend = getattr(torch.backends, "mps", None)
             resolved_device = "mps" if mps_backend and mps_backend.is_available() else "cpu"
 
+        pipeline_kwargs: dict[str, Any] = {
+            "model": model_id,
+            "revision": revision,
+            "device": resolved_device,
+        }
+        if resolved_cache_dir is not None:
+            pipeline_kwargs["model_kwargs"] = {"cache_dir": str(resolved_cache_dir)}
+        if resolved_device == "mps":
+            # SmolVLM's published config defaults to bfloat16. Float16 is the
+            # safer broadly supported MPS inference dtype for this pilot.
+            pipeline_kwargs["dtype"] = torch.float16
+        elif resolved_device == "cpu":
+            # Keep CPU inference compatible with backends lacking bfloat16
+            # kernels; the 500M checkpoint still fits comfortably in RAM.
+            pipeline_kwargs["dtype"] = torch.float32
+
         loaded_pipeline = pipeline(
             "image-text-to-text",
-            model=model_id,
-            revision=revision,
-            device=resolved_device,
+            **pipeline_kwargs,
         )
         model = getattr(loaded_pipeline, "model", None)
         config = getattr(model, "config", None)
         resolved_revision = getattr(config, "_commit_hash", None)
+        if resolved_revision is None and len(revision) == 40:
+            try:
+                int(revision, 16)
+            except ValueError:
+                pass
+            else:
+                # The requested revision is already an immutable Hub commit.
+                resolved_revision = revision
         precision = str(model.dtype) if getattr(model, "dtype", None) is not None else None
 
         return cls(
@@ -227,6 +262,7 @@ class TransformersVLMAdapter:
             transformers_version=_package_version("transformers"),
             torch_version=str(torch.__version__),
             generation=generation,
+            torch_module=torch,
         )
 
     @property
@@ -242,18 +278,21 @@ class TransformersVLMAdapter:
             {
                 "role": "user",
                 "content": [
-                    {"type": "image"},
+                    {"type": "image", "image": rgb_image},
                     {"type": "text", "text": question},
                 ],
             }
         ]
         try:
+            if self._torch is not None:
+                self._torch.manual_seed(self._generation.seed)
             output = self._pipeline(
                 text=messages,
-                images=[rgb_image],
                 max_new_tokens=self._generation.max_new_tokens,
-                do_sample=False,
-                num_beams=self._generation.num_beams,
+                generate_kwargs={
+                    "do_sample": False,
+                    "num_beams": self._generation.num_beams,
+                },
                 return_full_text=False,
             )
         finally:

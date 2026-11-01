@@ -10,6 +10,12 @@ dependencies = [
     "pillow>=10,<13",
 ]
 
+[project.optional-dependencies]
+inference = [
+    "torch>=2.15,<2.16",
+    "transformers>=5.22.1,<5.23",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
@@ -25,7 +31,7 @@ packages = ["src/halluood"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100
