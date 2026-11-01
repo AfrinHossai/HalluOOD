@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,33 @@ SHIFT_PARAMETERS: dict[str, tuple[dict[str, Any], ...]] = {
         {"factor": 0.4},
     ),
 }
+
+
+def derive_shift_seed(
+    sampling_seed: int,
+    image_id: str | int,
+    perturbation_type: str,
+    severity: int,
+) -> int:
+    """Derive a stable per-image/condition 32-bit seed from an experiment seed."""
+
+    if isinstance(sampling_seed, bool) or not isinstance(sampling_seed, int):
+        raise DistributionShiftError("sampling_seed must be a non-negative integer")
+    if sampling_seed < 0:
+        raise DistributionShiftError("sampling_seed must be a non-negative integer")
+    if isinstance(image_id, bool) or not isinstance(image_id, (str, int)):
+        raise DistributionShiftError("image_id must be a non-empty string or integer")
+    normalized_image_id = str(image_id).strip()
+    if not normalized_image_id:
+        raise DistributionShiftError("image_id must be a non-empty string or integer")
+    if perturbation_type not in SHIFT_PARAMETERS:
+        raise DistributionShiftError("unknown perturbation_type")
+    if isinstance(severity, bool) or not isinstance(severity, int) or severity not in (1, 2, 3):
+        raise DistributionShiftError("severity must be an integer from 1 through 3")
+    payload = (
+        f"{sampling_seed}:{normalized_image_id}:{perturbation_type}:{severity}".encode("utf-8")
+    )
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 
 @dataclass(frozen=True)

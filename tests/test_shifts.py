@@ -10,6 +10,7 @@ from halluood.shifts import (
     SHIFT_PARAMETERS,
     DistributionShiftError,
     apply_distribution_shift,
+    derive_shift_seed,
 )
 
 
@@ -86,6 +87,15 @@ def test_gaussian_noise_changes_with_seed() -> None:
         source.close()
         first.image.close()
         second.image.close()
+
+
+def test_per_image_condition_seed_is_stable_and_distinct() -> None:
+    first = derive_shift_seed(2027, "000000123456", "gaussian_noise", 2)
+
+    assert first == derive_shift_seed(2027, "000000123456", "gaussian_noise", 2)
+    assert first != derive_shift_seed(2027, "000000123456", "gaussian_noise", 3)
+    assert first != derive_shift_seed(2027, "000000123457", "gaussian_noise", 2)
+    assert 0 <= first < 2**32
 
 
 def test_path_input_is_read_only_and_grayscale_becomes_rgb(tmp_path) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -22,6 +21,7 @@ from halluood.shifts import (
     SHIFT_PARAMETERS,
     DistributionShiftError,
     apply_distribution_shift,
+    derive_shift_seed,
 )
 
 CATEGORIES = ("random", "popular", "adversarial")
@@ -73,11 +73,6 @@ def _pilot_image_names(annotations_dir: Path) -> dict[str, str]:
         image_id: per_category[CATEGORIES[0]][image_id]
         for image_id in sorted(shared_ids)
     }
-
-
-def _derive_perturbation_seed(seed: int, image_id: str, kind: str, severity: int) -> int:
-    payload = f"{seed}:{image_id}:{kind}:{severity}".encode("utf-8")
-    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 
 def _validate_source(path: Path) -> tuple[int, int]:
@@ -161,7 +156,7 @@ def prepare_shift_preview(
         )
         for perturbation_type in SHIFT_PARAMETERS:
             for severity in (1, 2, 3):
-                perturbation_seed = _derive_perturbation_seed(
+                perturbation_seed = derive_shift_seed(
                     random_seed, image_id, perturbation_type, severity
                 )
                 shifted = apply_distribution_shift(
