@@ -1,6 +1,6 @@
 # HalluOOD dataset and evaluation specification
 
-**Status:** proposed pilot specification. No dataset has been downloaded, no model has been run, and no HalluOOD results are reported here. POPE facts below were checked against the paper and the authors’ public repository on 2026-10-31.
+**Status:** the official POPE annotation snapshot, deterministic 100-image pilot, and its matching COCO images are prepared locally. No model has been run, and no HalluOOD results are reported here. POPE facts below were checked against the paper and the authors’ public repository on 2026-10-31.
 
 ## 1. Fit with the research plan
 
@@ -18,7 +18,7 @@ The primary source is the authors’ [POPE repository](https://github.com/RUCAIB
 - **Popular:** choose a common category that is not in the image.
 - **Adversarial:** choose a category that often co-occurs with objects in the image, while still absent from it.
 
-For its standard MSCOCO evaluation, the paper reports selecting 500 validation images with more than three annotated objects and asking six questions per image. This implies 3,000 rows per strategy and 9,000 rows across the random, popular, and adversarial files. Treat those counts as expected values to verify against the pinned files at ingestion, not as a substitute for checking their contents. The official repository lists the three files under [`output/coco`](https://github.com/RUCAIBox/POPE/tree/main/output/coco).
+For its standard MSCOCO evaluation, the paper reports selecting 500 validation images with more than three annotated objects and asking six questions per image. The locally pinned random, popular, and adversarial files each validate to 3,000 rows and 500 image filenames. The official repository lists the three files under [`output/coco`](https://github.com/RUCAIBox/POPE/tree/main/output/coco); their revision and checksums are in the local pilot metadata.
 
 ### Data structure and image dependency
 
@@ -33,24 +33,26 @@ The repository’s README shows each question as a JSON object with these fields
 
 The files have a `.json` extension but the official generator writes one JSON object per line, so they should be read as JSONL-style files. The README also describes `coco_ground_truth_segmentation.json`, whose rows contain an image filename and an object list, and the generator’s outputs for object frequencies and co-occurrences. See the [official README](https://github.com/RUCAIBox/POPE#collect-ground-truth-objects) and [question-generation code](https://raw.githubusercontent.com/RUCAIBox/POPE/main/main.py).
 
-The question rows refer to images by filename; they are not a replacement for the COCO image files. The standard image source is the **MS COCO 2014 validation image set**. HalluOOD will need access to the matching `COCO_val2014_*.jpg` files from the [official COCO download page](https://cocodataset.org/#download), or to a separately approved local copy. The image archive has not been downloaded for this task.
+The question rows refer to images by filename; they are not a replacement for the COCO image files. The required source is the **MS COCO 2014 validation image set**. The [official COCO download page](https://cocodataset.org/#download) lists the 2014 validation archive as `http://images.cocodataset.org/zips/val2014.zip` (about 6 GB) and documents the official Cloud Storage path `gs://images.cocodataset.org/val2014`. Each POPE filename follows `COCO_val2014_<12-digit-id>.jpg`, so the downloader requests only those exact files from `http://images.cocodataset.org/val2014/<filename>`. This direct object path was verified against a pilot image on the official host. The official page currently publishes HTTP links; the HTTPS alias failed hostname certificate verification in this environment, so the script does not disable TLS checks or route through a mirror. Because HTTP is unencrypted, the script restricts requests and redirects to the exact official host/path and decodes each JPEG, but this does not provide cryptographic transport authenticity. It does not download or extract the full archive, use an unofficial mirror, or fetch images outside the metadata’s 100-image pilot. Files are stored under `data/images/val2014/`; the whole `data/` directory is ignored by Git.
+
+Run the local preparation command from the project root with `PYTHONPATH=src python scripts/download_images.py`. It reads the three prepared pilot annotations and `data/processed/pope_pilot_metadata.json`, requires their image sets to agree, retries failed requests, skips existing readable JPEGs, and validates each image by decoding it. Use `--retries`, `--timeout`, `--pilot-dir`, `--metadata`, and `--output-dir` to adjust local paths and network behavior.
 
 ### Licensing facts and unresolved data rights
 
 The POPE repository has a [MIT license file](https://github.com/RUCAIBox/POPE/blob/main/LICENSE). Its text grants rights to “software and associated documentation files”; it does not clearly state a separate license for each generated question file, object annotation file, or image. Therefore, record the repository license as applying to the repository software, and treat the licensing of POPE data artifacts as **not fully verified** until the specific release is reviewed or clarified by its maintainers.
 
-COCO’s [official terms](https://github.com/cocodataset/cocodataset.github.io/blob/master/dataset/termsofuse.htm) say that COCO annotations and the website are under **CC BY 4.0**, while the COCO Consortium does not own the images’ copyrights; image use must follow the applicable Flickr terms, and users accept responsibility for use of the images. Do not describe the image archive as uniformly CC BY 4.0. Preserve source and attribution metadata, review image-level terms before reuse, and avoid redistributing image bytes unless the applicable rights allow it. The license for POPE’s derived question/label files remains an open item.
+COCO’s [official terms](https://github.com/cocodataset/cocodataset.github.io/blob/master/dataset/termsofuse.htm) say that COCO annotations and the website are under **CC BY 4.0**, while the COCO Consortium does not own the images’ copyrights; image use must follow the applicable Flickr terms, and users accept responsibility for use of the images. Do not describe the image archive as uniformly CC BY 4.0. The downloader retrieves images for local evaluation only; it does not determine image-level Flickr licensing or grant redistribution rights. Review image-level terms before reuse or publication, and do not redistribute image bytes unless the applicable rights allow it. The license for POPE’s derived question/label files remains an open item.
 
 ## 3. Proposed deterministic pilot subset
 
 Use the authors’ released COCO POPE files rather than regenerating questions with the repository script. The current generator calls Python’s `random.sample` and `random.choice` without setting a seed, so regeneration is not guaranteed to reproduce the released question rows. Pinning the released files is the simpler reproducibility path.
 
-At the future data-ingestion step:
+The local annotation pilot follows this procedure:
 
-1. Pin the POPE repository revision and record a SHA-256 checksum for each of the three source files. The exact revision and checksums are **not established in this documentation-only task** and must be recorded before evaluation.
-2. Read the random, popular, and adversarial files. Form the eligible image set from the intersection of their image filenames; sort the filenames lexicographically. Verify that the expected rows and image counts agree across files. If the files do not agree, stop and document the discrepancy rather than silently taking a union.
-3. Use a pinned NumPy version and `Generator(PCG64(2027))` to sample 100 distinct image filenames without replacement from that sorted list. Preserve the generator order for assignment: first 20 image groups for calibration and remaining 80 for held-out test. Save the exact filenames and split assignment in a versioned manifest. The seed and algorithm specify the procedure; the saved manifest makes the actual split auditable.
-4. Keep **all** POPE question rows for each selected image in its assigned split and include that image in all three sampling strategies. Do not split individual questions from one image across calibration and test. Assuming six questions per image in each strategy, the pilot contains 1,800 rows total: 360 calibration rows and 1,440 test rows. Recount and report the actual values after ingestion.
+1. Pin the POPE repository revision and record a SHA-256 checksum for each of the three source files in `data/processed/pope_pilot_metadata.json`.
+2. Read the random, popular, and adversarial files. Form the eligible image set from the intersection of their image filenames; sort the filenames lexicographically and verify that the files agree.
+3. Use NumPy `Generator(PCG64(2027))` to sample 100 distinct image filenames without replacement. The actual selected filenames and NumPy version are recorded in the local metadata. The prepared subset contains 100 images and 600 questions in each of the three strategies (1,800 rows total).
+4. Keep **all** POPE question rows for each selected image together across all three strategies. A calibration/test split has not yet been assigned; when one is created, it must group by image and be recorded before model outputs are inspected.
 
 This is a small pilot, not the full official POPE evaluation. With only 20 calibration image groups, fitted probability mappings and abstention thresholds will be unstable; treat those results as feasibility checks. Do not tune methods, parsers, or thresholds on the 80 held-out image groups. For the embedding-distance baseline, use a separate reference image bank that contains none of the calibration or test image IDs, and record its source and split.
 
