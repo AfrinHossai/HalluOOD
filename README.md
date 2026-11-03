@@ -163,10 +163,14 @@ This is a single-model, single-dataset study with 100 clean evaluation images an
 
 Future work should add other VLMs and datasets, expand the disjoint image sets, compare all methods at a matched larger scale, audit answerability under perturbation, measure false-positive object claims separately, and evaluate natural shifts. ECE and Brier score require a prespecified probability mapping trained on separate calibration images; threshold-based abstention alone does not establish calibrated probabilities or guaranteed risk.
 
+## Dataset licensing and attribution
+
+HalluOOD's MIT license covers its original code, not third-party assets. POPE source code is MIT, but the license for its generated question and label files is unresolved. COCO annotations are CC BY 4.0; COCO image rights remain subject to the terms for each image. See [data licensing and attribution](docs/data_licensing.md) before reusing or redistributing third-party material.
+
 ## References and licensing
 
 - Li, Y. et al. (2023). [Evaluating Object Hallucination in Large Vision-Language Models](https://aclanthology.org/2023.emnlp-main.20/). EMNLP 2023.
 - Lin, T.-Y. et al. (2014). [Microsoft COCO: Common Objects in Context](https://doi.org/10.1007/978-3-319-10602-1_48). ECCV 2014.
 - Marafioti, A. et al. (2025). [SmolVLM: Redefining small and efficient multimodal models](https://arxiv.org/abs/2504.05299). arXiv:2504.05299.
 - [Official POPE repository](https://github.com/RUCAIBox/POPE) and [COCO Terms of Use](https://github.com/cocodataset/cocodataset.github.io/blob/master/dataset/termsofuse.htm).
-- The project source declares MIT in `pyproject.toml` and the root `LICENSE`. The SmolVLM checkpoint has its own terms, listed as Apache 2.0 on the [model card](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct). The POPE repository's MIT license does not clearly establish a separate license for its generated question/label files. COCO annotations are CC BY 4.0, but the consortium does not own the images; follow applicable Flickr terms. Review source-level conditions before redistributing any data or images.
+- The project source declares MIT in `pyproject.toml` and the root `LICENSE`. The SmolVLM checkpoint has separate terms, listed as Apache 2.0 on the [model card](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct). See [Dataset licensing and attribution](docs/data_licensing.md) for the verified scope and remaining third-party data-rights questions.
