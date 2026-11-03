@@ -54,9 +54,7 @@ def _error_label(row: Mapping[str, Any], index: int) -> bool:
     if correct is not None and not isinstance(correct, bool):
         raise DistributionShiftEvaluationError(f"row {index} is_correct must be boolean")
     if error is None and correct is None:
-        raise DistributionShiftEvaluationError(
-            f"row {index} requires is_error or is_correct"
-        )
+        raise DistributionShiftEvaluationError(f"row {index} requires is_error or is_correct")
     if error is not None and correct is not None and error == correct:
         raise DistributionShiftEvaluationError(f"row {index} has inconsistent error labels")
     return error if error is not None else not correct
@@ -110,9 +108,7 @@ def _condition_metrics(
         ),
         "auprc_error": None if positive_count else "requires at least one incorrect scored example",
         "mean_generation_time_seconds": _mean_optional(rows, "inference_time_seconds"),
-        "mean_entropy_scoring_time_seconds": _mean_optional(
-            rows, "uncertainty_time_seconds"
-        ),
+        "mean_entropy_scoring_time_seconds": _mean_optional(rows, "uncertainty_time_seconds"),
     }
 
 
@@ -188,9 +184,7 @@ def summarize_distribution_shift(
         _error_label(row, index)
         _entropy(row, index)
 
-    condition_metrics = [
-        _condition_metrics("clean", "none", 0, clean_rows)
-    ]
+    condition_metrics = [_condition_metrics("clean", "none", 0, clean_rows)]
     clean_accuracy = condition_metrics[0]["accuracy"]
     clean_entropy = condition_metrics[0]["mean_normalized_entropy"]
     for perturbation_type in SHIFT_PARAMETERS:
@@ -235,7 +229,7 @@ def summarize_distribution_shift(
         "paired_image_question_count": len(clean_keys),
         "condition_count": len(condition_metrics) - 1,
         "conditions": condition_metrics,
-        "clean_condition": "original unmodified images reused from the prior entropy pilot",
+        "clean_condition": "original unmodified images paired by question, image, and category",
         "error_target": "incorrect, ambiguous, or failed yes/no answer",
         "score_definition": (
             "Normalized entropy of conditional Yes/No candidate-sequence likelihoods; "
@@ -276,9 +270,9 @@ def render_severity_plot(
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="white"/>',
-        '<style>text{font-family:Arial,sans-serif;fill:#202124}.grid{stroke:#dadce0;'
-        'stroke-width:1}.axis{stroke:#5f6368;stroke-width:1.5}.series{fill:none;stroke-width:3}'
-        '.point{stroke:white;stroke-width:1.5}</style>',
+        "<style>text{font-family:Arial,sans-serif;fill:#202124}.grid{stroke:#dadce0;"
+        "stroke-width:1}.axis{stroke:#5f6368;stroke-width:1.5}.series{fill:none;stroke-width:3}"
+        ".point{stroke:white;stroke-width:1.5}</style>",
         f'<text x="{width / 2:.1f}" y="30" text-anchor="middle" font-size="18" '
         f'font-weight="bold">{escape(title)}</text>',
     ]
@@ -291,9 +285,9 @@ def render_severity_plot(
                 f'<line class="grid" x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{bottom}"/>',
                 f'<line class="grid" x1="{left}" y1="{y:.1f}" x2="{right}" y2="{y:.1f}"/>',
                 f'<text x="{x:.1f}" y="{bottom + 23}" text-anchor="middle" font-size="12">'
-                f'{fraction:.1f}</text>',
+                f"{fraction:.1f}</text>",
                 f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" font-size="12">'
-                f'{fraction:.1f}</text>',
+                f"{fraction:.1f}</text>",
             ]
         )
     elements.extend(
@@ -306,14 +300,11 @@ def render_severity_plot(
     legend_y = top + 24
     for kind_index, perturbation_type in enumerate(SHIFT_PARAMETERS):
         rows = [
-            row
-            for row in condition_metrics
-            if row.get("perturbation_type") == perturbation_type
+            row for row in condition_metrics if row.get("perturbation_type") == perturbation_type
         ]
         rows_by_severity = {int(row["severity"]): row for row in rows}
         points = [(0, clean.get(metric))] + [
-            (severity, rows_by_severity.get(severity, {}).get(metric))
-            for severity in (1, 2, 3)
+            (severity, rows_by_severity.get(severity, {}).get(metric)) for severity in (1, 2, 3)
         ]
         valid_points = [(severity, value) for severity, value in points if value is not None]
         if valid_points:
@@ -337,17 +328,17 @@ def render_severity_plot(
                 f'<line x1="{legend_x}" y1="{legend_y}" x2="{legend_x + 22}" '
                 f'y2="{legend_y}" stroke="{colors[perturbation_type]}" stroke-width="3"/>',
                 f'<text x="{legend_x + 28}" y="{legend_y + 4}" font-size="11">'
-                f'{escape(perturbation_type.replace("_", " "))}</text>',
+                f"{escape(perturbation_type.replace('_', ' '))}</text>",
             ]
         )
     elements.extend(
         [
             f'<text x="{left + plot_width / 2:.1f}" y="{height - 40}" '
             'text-anchor="middle" font-size="14">'
-            'Severity (0 = clean; 1–3 = increasing shift strength)</text>',
+            "Severity (0 = clean; 1–3 = increasing shift strength)</text>",
             f'<text x="24" y="{top + plot_height / 2:.1f}" text-anchor="middle" '
             f'font-size="14" transform="rotate(-90 24 {top + plot_height / 2:.1f})">'
-            f'{escape(y_label)}</text>',
+            f"{escape(y_label)}</text>",
             "</svg>",
         ]
     )

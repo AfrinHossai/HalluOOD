@@ -24,6 +24,7 @@ from halluood.model import (
     TransformersVLMAdapter,
     VLMAdapter,
 )
+from halluood.predictions import normalize_prediction
 from halluood.uncertainty import score_binary_answer_entropy
 
 CATEGORIES = ("random", "popular", "adversarial")
@@ -31,53 +32,7 @@ DEFAULT_DATA_DIR = Path("data/processed")
 DEFAULT_IMAGE_DIR = Path("data/images/val2014")
 DEFAULT_OUTPUT = Path("data/results/pope_baseline_smollm_500m_30_seed_2027.jsonl")
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "huggingface" / "halluood"
-_ANSWER_PREFIX = re.compile(r"^\s*(yes|no)(?=$|[\s,.;:!?])", flags=re.IGNORECASE)
-_ANSWER_WORD = re.compile(r"\b(yes|no)\b", flags=re.IGNORECASE)
-_UNCERTAINTY = re.compile(
-    r"\b(?:maybe|perhaps|possibly|no mention|cannot determine|cannot tell|"
-    r"cannot be determined|can't determine|can't tell|not sure|unsure|uncertain|"
-    r"unclear|unknown|not enough information|provided facts|don't know)\b",
-    flags=re.IGNORECASE,
-)
-_DIRECT_NEGATIVE = re.compile(
-    r"^\s*there\s+(?:is|are|was|were)\s+no\s+.+?\b"
-    r"(?:present|visible|in (?:the )?image|in (?:the )?picture)\b",
-    flags=re.IGNORECASE,
-)
-_DIRECT_POSITIVE = re.compile(
-    r"^\s*there\s+(?:is|are|was|were)\s+(?:a|an|one|some|at least one)\s+.+?\b"
-    r"(?:present|visible|in (?:the )?image|in (?:the )?picture)\b",
-    flags=re.IGNORECASE,
-)
 _COCO_IMAGE_ID = re.compile(r"^COCO_(?:train|val)2014_(\d{12})\.jpg$", flags=re.IGNORECASE)
-
-
-def normalize_prediction(raw_prediction: str) -> tuple[str | None, str]:
-    """Extract an unambiguous leading yes/no answer, preserving raw text elsewhere."""
-
-    if not isinstance(raw_prediction, str) or not raw_prediction.strip():
-        return None, "ambiguous"
-
-    if _UNCERTAINTY.search(raw_prediction):
-        return None, "ambiguous"
-
-    match = _ANSWER_PREFIX.match(raw_prediction)
-    answer_words = {word.casefold() for word in _ANSWER_WORD.findall(raw_prediction)}
-    if match is not None:
-        first_answer = match.group(1).casefold()
-        if len(answer_words) != 1 or first_answer == "no" and re.match(
-            r"^\s*no\s+doubt\b", raw_prediction, flags=re.IGNORECASE
-        ):
-            return None, "ambiguous"
-        return first_answer, "parsed"
-
-    if _DIRECT_NEGATIVE.search(raw_prediction) and "yes" not in answer_words:
-        return "no", "parsed"
-    if _DIRECT_POSITIVE.search(raw_prediction) and "no" not in answer_words:
-        return "yes", "parsed"
-    if len(answer_words) > 1:
-        return None, "ambiguous"
-    return None, "ambiguous"
 
 
 def select_balanced_questions(
@@ -126,9 +81,7 @@ def select_balanced_questions(
         for index, category in enumerate(CATEGORIES)
     }
     while sum(quotas.values()) < sample_size:
-        available = [
-            category for category in CATEGORIES if quotas[category] < capacities[category]
-        ]
+        available = [category for category in CATEGORIES if quotas[category] < capacities[category]]
         if not available:
             raise ValueError("could not allocate the requested sample across POPE categories")
         category = min(available, key=lambda item: (quotas[item], CATEGORIES.index(item)))
@@ -318,8 +271,7 @@ def run_baseline(
                 "normalized_prediction": normalized_prediction,
                 "prediction_status": prediction_status,
                 "model_identifier": metadata["model_id"],
-                "model_revision": metadata["resolved_revision"]
-                or metadata["requested_revision"],
+                "model_revision": metadata["resolved_revision"] or metadata["requested_revision"],
                 "device": metadata["device"],
                 "precision": metadata["precision"],
                 "torch_version": metadata["torch_version"],
@@ -362,9 +314,7 @@ def run_baseline(
         ),
     }
     if record_uncertainty:
-        uncertainty_rows = [
-            row for row in result_rows if row.get("uncertainty_score") is not None
-        ]
+        uncertainty_rows = [row for row in result_rows if row.get("uncertainty_score") is not None]
         summary["uncertainty_method"] = {
             "name": "conditional_binary_answer_sequence_entropy",
             "candidate_answers": ["Yes", "No"],
