@@ -1,6 +1,6 @@
 # HalluOOD dataset and evaluation specification
 
-**Status:** the official POPE annotation snapshot, deterministic 100-image pilot, and its matching COCO images are prepared locally. No model has been run, and no HalluOOD results are reported here. POPE facts below were checked against the paper and the authors’ public repository on 2026-10-31.
+**Status:** the pinned POPE annotation snapshot, deterministic 100-image subset, and matching COCO images were prepared locally. Model evaluations have since been run; see the [final research report](final_research_report.md) and [expanded robustness evaluation](robustness_evaluation.md). POPE facts below were checked against the paper and the authors’ public repository on 2026-10-31.
 
 ## 1. Fit with the research plan
 
@@ -52,13 +52,13 @@ The local annotation pilot follows this procedure:
 1. Pin the POPE repository revision and record a SHA-256 checksum for each of the three source files in `data/processed/pope_pilot_metadata.json`.
 2. Read the random, popular, and adversarial files. Form the eligible image set from the intersection of their image filenames; sort the filenames lexicographically and verify that the files agree.
 3. Use NumPy `Generator(PCG64(2027))` to sample 100 distinct image filenames without replacement. The actual selected filenames and NumPy version are recorded in the local metadata. The prepared subset contains 100 images and 600 questions in each of the three strategies (1,800 rows total).
-4. Keep **all** POPE question rows for each selected image together across all three strategies. A calibration/test split has not yet been assigned; when one is created, it must group by image and be recorded before model outputs are inspected.
+4. Keep **all** POPE question rows for each selected image together across all three strategies. The later expanded abstention evaluation groups by image, excludes the 50-image reference bank, and uses 10 calibration and 40 held-out images; the earlier pilot abstention analysis uses a separate 20-image calibration set and 30-image evaluation set. See the run-specific split manifests and results in the [expanded robustness report](robustness_evaluation.md) and [pilot abstention report](abstention.md).
 
-This is a small pilot, not the full official POPE evaluation. With only 20 calibration image groups, fitted probability mappings and abstention thresholds will be unstable; treat those results as feasibility checks. Do not tune methods, parsers, or thresholds on the 80 held-out image groups. For the embedding-distance baseline, use a separate reference image bank that contains none of the calibration or test image IDs, and record its source and split.
+This is a small pilot, not the full official POPE evaluation. The original design anticipated small calibration groups; the completed reports document the actual split sizes and the limitations of their resulting estimates. For the 30-question embedding-distance comparison, the reference image bank was disjoint from pilot evaluation IDs. In the expanded analysis, the existing 50-image bank overlaps the 100-image clean set, so those IDs were excluded before constructing the separate calibration and held-out evaluation subsets.
 
-### Optional paired shift extension
+### Paired shift extension: original proposal and current implementation
 
-To connect POPE to the research plan’s shift question, an explicitly labeled extension can use the same selected images in clean and controlled-corruption conditions. One small proposed first step is clean images plus two predeclared Gaussian-blur levels (for example, Pillow blur radii 1 and 2); these are **HalluOOD experimental settings, not official POPE conditions**. Pin the image-processing library/version and parameters. Keep image IDs, questions, and official labels paired across conditions. Before treating a transformed row as evaluable, use a predeclared image-review rule to determine whether its object-presence answer is still visually answerable. Record `condition_id`, parameters, and any unanswerable/excluded status; do not quietly change the official POPE label. POPE’s random/popular/adversarial strata remain separate from blur severity.
+The original proposal was to pair clean images with predeclared corruptions; those perturbations are **HalluOOD settings, not official POPE conditions**. The completed local experiment uses Gaussian blur, brightness reduction, Gaussian noise, and contrast reduction at three severities each; run details are in the [expanded robustness report](robustness_evaluation.md). Image IDs, questions, and official labels remain paired. The expanded shift subset does not have an independent item-level answerability audit, which limits interpretation of errors when corruption hides visual evidence. POPE’s random/popular/adversarial strata remain separate from perturbation severity.
 
 ## 4. Ground truth, model outputs, and uncertainty storage
 
@@ -116,16 +116,15 @@ For the primary POPE object-hallucination target, restrict to questions whose of
 
 As a separate secondary analysis, evaluate whether scores predict **any POPE answer error** on both `yes` and `no` questions. A `gold=yes`/predicted-`no` row is an object-detection miss, not a false-positive object hallucination; keeping the targets separate prevents general mistakes from being mislabeled as hallucinations. Report results by strategy and condition, with image-clustered paired confidence intervals. No benchmark or HalluOOD performance values are asserted in this plan.
 
-## 7. Open questions before data acquisition
+## 7. Remaining data and validity questions
 
-- Which exact POPE repository revision and checksums will be the frozen source snapshot?
-- Does the POPE maintainer intend the MIT repository license to cover the generated question/label files, or do those files have a separate data license?
-- For each selected COCO image, what source and image-level Flickr terms apply, and can the planned research use and any later release comply with them?
-- Which frozen VLMs will be evaluated, and can their training data be checked for COCO image overlap?
-- What strict answer parser and image-answerability audit rubric will be fixed before inference?
-- Will the controlled-blur extension be included in the pilot, and what exact image-processing version and annotation audit will be preregistered?
+- The current source revision and checksums are pinned in the local metadata; the separate license for POPE's generated question and label files remains unverified.
+- COCO's terms distinguish annotations from image copyrights. Image-level source terms must be reviewed before redistributing any images.
+- The recorded experiments use one frozen SmolVLM checkpoint. Its complete training-data overlap with COCO is unknown, and other VLMs remain future work.
+- The evaluation parser and shift parameters are recorded in the run reports, but the expanded shift examples have no independent image-answerability adjudication.
+- Natural distribution shifts, broader datasets, claim-level hallucination labels, and calibrated probability scores remain future research. ECE and Brier score were not measured in the completed experiments.
 
-Until these are resolved, the pilot subset is a reproducible sampling proposal, not a downloaded or frozen dataset artifact.
+The local annotation and image subset is prepared and frozen for the recorded experiments. The unresolved rights and validity questions limit redistribution and the strength of research claims; they do not change the scope of results documented in the evaluation reports.
 
 ## Sources
 

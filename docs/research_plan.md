@@ -1,6 +1,6 @@
 # HalluOOD research plan
 
-**Status:** proposed study; no experiments or results are reported here.
+**Status:** original study proposal. This document records the planned questions and hypotheses; completed experiments and results are summarized in the [final research report](final_research_report.md) and the linked evaluation reports.
 
 ## 1. Goal and research question
 
